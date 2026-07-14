@@ -1,0 +1,722 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Urban Life — Systems Map</title>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
+  <style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { background: #0d0d0d; color: #ccc; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; overflow: hidden; user-select: none; }
+
+#toolbar {
+  position: fixed; top: 0; left: 0; right: 0; height: 44px; z-index: 100;
+  background: #111; border-bottom: 1px solid #1e1e1e;
+  display: flex; align-items: center; padding: 0 16px; gap: 14px;
+}
+.title { font-size: 11px; font-weight: 800; letter-spacing: 1.5px; color: #555; white-space: nowrap; }
+.legend { display: flex; gap: 12px; font-size: 11px; color: #555; }
+.leg { display: flex; align-items: center; gap: 5px; }
+.ldot { width: 7px; height: 7px; border-radius: 50%; display: inline-block; }
+.sep { width: 1px; height: 20px; background: #222; flex-shrink: 0; }
+.tbar-right { margin-left: auto; display: flex; gap: 6px; align-items: center; }
+button.tbtn {
+  background: #1a1a1a; border: 1px solid #2a2a2a; color: #666; font-size: 11px;
+  padding: 4px 11px; border-radius: 5px; cursor: pointer; white-space: nowrap;
+}
+button.tbtn:hover { background: #222; color: #bbb; border-color: #444; }
+button.tbtn.accent { background: #1a2e1a; border-color: #2a4a2a; color: #6abf69; }
+button.tbtn.accent:hover { background: #1f3a1f; color: #81c784; }
+
+#sync-dot {
+  width: 7px; height: 7px; border-radius: 50%; background: #3a3a3a;
+  transition: background 0.3s; cursor: default; flex-shrink: 0;
+}
+#sync-dot.connected  { background: #4caf50; }
+#sync-dot.pending    { background: #ffb300; }
+#sync-dot.error      { background: #f44336; }
+#sync-label { font-size: 10px; color: #3a3a3a; white-space: nowrap; transition: color 0.3s; }
+#sync-label.connected { color: #4a5a4a; }
+#sync-label.pending   { color: #5a4a1a; }
+#sync-label.error     { color: #5a2a2a; }
+
+#wrap { position: fixed; top: 44px; left: 0; right: 0; bottom: 0; overflow: hidden; cursor: grab; }
+#wrap.panning { cursor: grabbing; }
+#canvas { position: absolute; transform-origin: 0 0; }
+svg#lines { position: absolute; top: 0; left: 0; pointer-events: none; overflow: visible; }
+
+.cat-box { position: absolute; border-radius: 10px; background: #141414; box-shadow: 0 4px 20px rgba(0,0,0,0.5); transition: box-shadow 0.15s; }
+.cat-box:hover { box-shadow: 0 6px 28px rgba(0,0,0,0.7); }
+.cat-box.dragging { box-shadow: 0 12px 40px rgba(0,0,0,0.9); z-index: 50; }
+.cat-inner { border-radius: 10px; overflow: hidden; }
+.cat-header { padding: 0 10px; height: 34px; display: flex; align-items: center; gap: 7px; font-size: 10px; font-weight: 800; letter-spacing: 1.3px; color: #fff; cursor: move; }
+.cat-label { flex: 1; pointer-events: none; }
+.cat-count { font-size: 9px; opacity: 0.55; font-weight: 400; white-space: nowrap; pointer-events: none; }
+.hdr-btn { width: 18px; height: 18px; border-radius: 4px; border: none; cursor: pointer; font-size: 13px; display: flex; align-items: center; justify-content: center; opacity: 0; transition: opacity 0.15s; flex-shrink: 0; font-weight: 700; }
+.cat-header:hover .hdr-btn { opacity: 1; }
+.hdr-add { background: rgba(255,255,255,0.2); color: #fff; }
+.hdr-add:hover { background: rgba(255,255,255,0.35); }
+.hdr-del { background: rgba(0,0,0,0.3); color: rgba(255,255,255,0.65); font-size: 15px; }
+.hdr-del:hover { background: rgba(180,0,0,0.55); color: #fff; }
+.cat-grid { padding: 8px; display: grid; grid-template-columns: 1fr 1fr; gap: 4px; background: #141414; }
+.chip { display: flex; align-items: center; gap: 4px; background: #1c1c1c; border-radius: 4px; padding: 0 6px; height: 22px; overflow: hidden; border: 1px solid #252525; cursor: pointer; transition: border-color 0.12s, background 0.12s; }
+.chip:hover { border-color: #3a3a3a; background: #222; }
+.chip.active-chip { border-color: #555 !important; background: #252525 !important; }
+.chip.done { color: #ccc; }
+.chip.gdd  { color: #90caf9; border-color: #1a3360; }
+.chip.pending { color: #555; }
+.chip-dot { width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0; cursor: pointer; transition: transform 0.12s; }
+.chip-dot:hover { transform: scale(1.5); }
+.chip-name { font-size: 10.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; pointer-events: none; }
+.chip-x { display: none; width: 14px; height: 14px; background: rgba(180,0,0,0.7); border: none; border-radius: 3px; color: #fff; font-size: 11px; cursor: pointer; flex-shrink: 0; align-items: center; justify-content: center; padding: 0; }
+.chip:hover .chip-x { display: flex; }
+.chip-x:hover { background: rgba(220,0,0,0.9); }
+.add-row { grid-column: span 2; display: flex; gap: 4px; padding: 2px 0; }
+.add-row input { flex: 1; background: #222; border: 1px solid #444; color: #ccc; border-radius: 4px; padding: 2px 6px; font-size: 10.5px; outline: none; height: 22px; }
+.add-row input:focus { border-color: #666; }
+.add-row select { background: #222; border: 1px solid #444; color: #ccc; border-radius: 4px; padding: 0 3px; font-size: 10px; height: 22px; cursor: pointer; }
+.add-ok     { width: 22px; height: 22px; border-radius: 4px; border: none; cursor: pointer; background: #2e5a2e; color: #81c784; font-size: 13px; display: flex; align-items: center; justify-content: center; }
+.add-cancel { width: 22px; height: 22px; border-radius: 4px; border: none; cursor: pointer; background: #3a1a1a; color: #ef9a9a; font-size: 15px; display: flex; align-items: center; justify-content: center; }
+.add-ok:hover { background: #3a7a3a; } .add-cancel:hover { background: #5a2020; }
+
+#sidebar { position: fixed; top: 44px; right: -310px; width: 298px; bottom: 0; z-index: 95; background: #161616; border-left: 1px solid #1e1e1e; display: flex; flex-direction: column; transition: right 0.25s cubic-bezier(0.4,0,0.2,1); overflow: hidden; }
+#sidebar.open { right: 0; }
+#sb-color-bar { height: 5px; flex-shrink: 0; transition: background 0.2s; }
+#sb-header { padding: 12px 14px 10px; border-bottom: 1px solid #1e1e1e; flex-shrink: 0; }
+#sb-top-row { display: flex; align-items: flex-start; gap: 6px; margin-bottom: 4px; }
+#sb-name { font-size: 14px; font-weight: 700; color: #e0e0e0; flex: 1; line-height: 1.3; }
+#sb-close { width: 22px; height: 22px; background: #1e1e1e; border: 1px solid #2a2a2a; border-radius: 5px; color: #555; font-size: 15px; cursor: pointer; flex-shrink: 0; display: flex; align-items: center; justify-content: center; }
+#sb-close:hover { background: #2a2a2a; color: #ccc; }
+#sb-cat-label { font-size: 10px; color: #444; letter-spacing: 0.8px; text-transform: uppercase; margin-bottom: 6px; }
+.sb-badge { display: inline-flex; align-items: center; gap: 5px; font-size: 10px; font-weight: 600; padding: 2px 8px; border-radius: 10px; }
+.sb-badge.d { background: #1a3a1a; color: #81c784; }
+.sb-badge.g { background: #1a2a4a; color: #90caf9; }
+.sb-badge.p { background: #1e1e1e; color: #444; }
+.sb-badge-dot { width: 5px; height: 5px; border-radius: 50%; }
+.sb-badge.d .sb-badge-dot { background: #4caf50; }
+.sb-badge.g .sb-badge-dot { background: #2196f3; }
+.sb-badge.p .sb-badge-dot { background: #3a3a3a; }
+#sb-body { flex: 1; overflow-y: auto; padding: 14px; display: flex; flex-direction: column; gap: 16px; }
+#sb-body::-webkit-scrollbar { width: 3px; }
+#sb-body::-webkit-scrollbar-track { background: #161616; }
+#sb-body::-webkit-scrollbar-thumb { background: #2a2a2a; border-radius: 2px; }
+.sb-sec-title { font-size: 10px; font-weight: 700; color: #444; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 7px; display: flex; align-items: center; gap: 6px; }
+#sb-desc { font-size: 12px; color: #666; line-height: 1.65; border-radius: 5px; outline: none; padding: 6px 8px; cursor: text; white-space: pre-wrap; word-break: break-word; border: 1px solid transparent; min-height: 32px; user-select: text; transition: border-color 0.12s, background 0.12s; }
+#sb-desc:hover  { border-color: #222; background: #1c1c1c; }
+#sb-desc:focus  { border-color: #2e2e2e; background: #1c1c1c; color: #888; }
+#sb-desc:empty::before { content: 'Escribe una descripción...'; color: #333; }
+#sb-progress { font-size: 10px; color: #3a3a3a; }
+#sb-progress span { color: #81c784; font-weight: 600; }
+#sb-subs { list-style: none; display: flex; flex-direction: column; gap: 2px; }
+.sb-sub { display: flex; align-items: flex-start; gap: 8px; padding: 5px 7px; border-radius: 5px; cursor: pointer; font-size: 11px; color: #555; border: 1px solid transparent; transition: background 0.1s, color 0.1s; }
+.sb-sub:hover  { background: #1c1c1c; color: #888; border-color: #222; }
+.sb-sub.checked { color: #81c784; }
+.sb-sub.checked:hover { background: #1a2e1a; border-color: #2a4a2a; }
+.sb-check { font-size: 13px; flex-shrink: 0; line-height: 1.3; }
+.sb-sub-text { flex: 1; line-height: 1.4; }
+.sb-empty { font-size: 11px; color: #2e2e2e; font-style: italic; padding: 6px 0; }
+#sb-blocks { display: flex; flex-direction: column; gap: 3px; }
+.sb-block { position: relative; border-radius: 5px; border: 1px solid transparent; padding: 5px 8px 5px 6px; display: flex; align-items: flex-start; gap: 7px; transition: border-color 0.12s, background 0.12s; user-select: text; }
+.sb-block:hover { border-color: #222; background: #1c1c1c; }
+.sb-block:focus-within { border-color: #2e2e2e; background: #1c1c1c; }
+.sb-block-type { flex-shrink: 0; width: 16px; height: 16px; border-radius: 3px; margin-top: 1px; display: flex; align-items: center; justify-content: center; font-size: 9px; font-weight: 800; }
+.sb-block.title    .sb-block-type { background: #2a2a2a; color: #666; }
+.sb-block.subtitle .sb-block-type { background: #222; color: #555; }
+.sb-block.body     .sb-block-type { background: #1e1e1e; color: #444; }
+.sb-block-text { flex: 1; outline: none; cursor: text; white-space: pre-wrap; word-break: break-word; min-height: 1em; line-height: 1.5; user-select: text; }
+.sb-block.title    .sb-block-text { font-size: 13px; font-weight: 700; color: #ddd; }
+.sb-block.subtitle .sb-block-text { font-size: 12px; font-weight: 600; color: #999; }
+.sb-block.body     .sb-block-text { font-size: 11px; color: #666; line-height: 1.65; }
+.sb-block-text:empty::before { color: #2e2e2e; font-style: italic; font-weight: 400; }
+.sb-block.title    .sb-block-text:empty::before { content: 'Título...'; font-size: 13px; }
+.sb-block.subtitle .sb-block-text:empty::before { content: 'Subtítulo...'; font-size: 12px; }
+.sb-block.body     .sb-block-text:empty::before { content: 'Escribe aquí...'; font-size: 11px; }
+.sb-block-del { display: none; width: 16px; height: 16px; background: rgba(180,0,0,0.6); border: none; border-radius: 3px; color: #fff; font-size: 12px; cursor: pointer; flex-shrink: 0; align-items: center; justify-content: center; padding: 0; margin-top: 1px; user-select: none; }
+.sb-block:hover .sb-block-del { display: flex; }
+.sb-block-del:hover { background: rgba(220,0,0,0.9); }
+#sb-add-wrap { position: relative; }
+#sb-add-btn { width: 100%; padding: 6px; background: #1a1a1a; border: 1px dashed #2a2a2a; border-radius: 5px; color: #3a3a3a; font-size: 11px; cursor: pointer; transition: border-color 0.12s, color 0.12s; text-align: center; }
+#sb-add-btn:hover { border-color: #444; color: #666; background: #1c1c1c; }
+#sb-add-menu { display: none; position: absolute; bottom: calc(100% + 4px); left: 0; right: 0; background: #1e1e1e; border: 1px solid #2e2e2e; border-radius: 7px; overflow: hidden; z-index: 10; }
+#sb-add-menu.show { display: block; }
+.sb-add-opt { width: 100%; padding: 8px 12px; background: none; border: none; color: #888; font-size: 11px; cursor: pointer; text-align: left; display: flex; align-items: center; gap: 8px; }
+.sb-add-opt:hover { background: #252525; color: #ccc; }
+.sb-add-opt .opt-badge { width: 18px; height: 18px; border-radius: 3px; display: flex; align-items: center; justify-content: center; font-size: 9px; font-weight: 800; }
+#modal-bg { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.75); z-index: 200; align-items: center; justify-content: center; }
+#modal-bg.show { display: flex; }
+#modal { background: #1a1a1a; border: 1px solid #333; border-radius: 12px; padding: 24px; width: 300px; display: flex; flex-direction: column; gap: 14px; }
+#modal h3 { font-size: 13px; color: #ccc; font-weight: 700; }
+#modal label { font-size: 11px; color: #666; display: flex; flex-direction: column; gap: 5px; }
+#modal input[type=text] { background: #222; border: 1px solid #333; color: #ccc; border-radius: 6px; padding: 7px 10px; font-size: 12px; outline: none; }
+#modal input[type=color] { height: 34px; padding: 2px 4px; cursor: pointer; border-radius: 6px; border: 1px solid #333; background: #222; width: 100%; }
+#modal input:focus { border-color: #555; }
+.modal-btns { display: flex; gap: 8px; justify-content: flex-end; margin-top: 4px; }
+.modal-btns button { padding: 6px 16px; border-radius: 6px; border: none; font-size: 12px; cursor: pointer; }
+.modal-btns .ok { background: #2e5a2e; color: #81c784; }
+.modal-btns .ok:hover { background: #3a7a3a; }
+.modal-btns .cancel { background: #222; color: #777; }
+.modal-btns .cancel:hover { background: #2e2e2e; color: #bbb; }
+#footer { position: fixed; bottom: 10px; right: 14px; font-size: 10px; color: #2a2a2a; background: #0f0f0f; padding: 4px 10px; border-radius: 6px; border: 1px solid #1a1a1a; }
+  </style>
+</head>
+<body>
+
+<div id="toolbar">
+  <span class="title">URBAN LIFE — SYSTEMS MAP</span>
+  <div class="sep"></div>
+  <div class="legend">
+    <span class="leg"><span class="ldot" style="background:#4caf50"></span>Implementado</span>
+    <span class="leg"><span class="ldot" style="background:#2196f3"></span>GDD Listo</span>
+    <span class="leg"><span class="ldot" style="background:#3a3a3a"></span>Pendiente</span>
+    <span style="font-size:10px;color:#2e2e2e">· clic chip = info · clic ● = estado</span>
+  </div>
+  <div class="tbar-right">
+    <div id="sync-dot" title="Conectando..."></div>
+    <span id="sync-label">Conectando...</span>
+    <div class="sep"></div>
+    <button class="tbtn" onclick="zoomBy(0.12)">＋</button>
+    <button class="tbtn" onclick="zoomBy(-0.12)">－</button>
+    <button class="tbtn" onclick="resetView()">Reset</button>
+    <div class="sep"></div>
+    <button class="tbtn" onclick="openModal()">＋ Categoría</button>
+  </div>
+</div>
+
+<div id="wrap"><div id="canvas"><svg id="lines"></svg></div></div>
+
+<div id="sidebar">
+  <div id="sb-color-bar"></div>
+  <div id="sb-header">
+    <div id="sb-top-row">
+      <div id="sb-name">—</div>
+      <button id="sb-close" onclick="closeSidebar()">×</button>
+    </div>
+    <div id="sb-cat-label"></div>
+    <div id="sb-badge" class="sb-badge p"><span class="sb-badge-dot"></span><span id="sb-status-text">Pendiente</span></div>
+  </div>
+  <div id="sb-body">
+    <div>
+      <div class="sb-sec-title">Descripción</div>
+      <div id="sb-desc" contenteditable="true" spellcheck="false"></div>
+    </div>
+    <div>
+      <div class="sb-sec-title">
+        Subtemas
+        <span id="sb-progress" style="margin-left:auto;font-weight:400;font-size:10px;letter-spacing:0"></span>
+      </div>
+      <ul id="sb-subs"></ul>
+    </div>
+    <div>
+      <div class="sb-sec-title">Notas</div>
+      <div id="sb-blocks"></div>
+      <div id="sb-add-wrap" style="margin-top:6px">
+        <button id="sb-add-btn" onclick="toggleAddMenu()">+ Agregar bloque</button>
+        <div id="sb-add-menu">
+          <button class="sb-add-opt" onclick="addBlock('title')"><span class="opt-badge" style="background:#2a2a2a;color:#888">T</span> Título</button>
+          <button class="sb-add-opt" onclick="addBlock('subtitle')"><span class="opt-badge" style="background:#222;color:#666">S</span> Subtítulo</button>
+          <button class="sb-add-opt" onclick="addBlock('body')"><span class="opt-badge" style="background:#1e1e1e;color:#555">¶</span> Texto cuerpo</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div id="modal-bg">
+  <div id="modal">
+    <h3>Nueva Categoría</h3>
+    <label>Nombre<input id="m-name" type="text" placeholder="ej. INVENTARIO"></label>
+    <label>Color<input id="m-color" type="color" value="#546e7a"></label>
+    <div class="modal-btns">
+      <button class="cancel" onclick="closeModal()">Cancelar</button>
+      <button class="ok" onclick="confirmModal()">Crear</button>
+    </div>
+  </div>
+</div>
+
+<div id="footer"></div>
+
+<script>
+// ═══════════════════════════════════════
+// SUPABASE
+// ═══════════════════════════════════════
+const SUPA_URL = 'https://jzlbacoxajcodnoytcsv.supabase.co';
+const SUPA_KEY = 'sb_publishable_olXNAE19HldONgXL1WvRnA_4S-9sOPZ';
+const db = window.supabase.createClient(SUPA_URL, SUPA_KEY);
+
+let saveTimer   = null;
+let applyingRemote = false;
+
+function setSyncStatus(state) {
+  const dot = document.getElementById('sync-dot');
+  const lbl = document.getElementById('sync-label');
+  dot.className = '';
+  lbl.className = '';
+  const map = {
+    connecting:   [''           , 'Conectando...'],
+    connected:    ['connected'  , 'En línea'],
+    pending:      ['pending'    , 'Guardando...'],
+    saved:        ['connected'  , 'Guardado'],
+    error:        ['error'      , 'Error al guardar'],
+    offline:      ['error'      , 'Sin conexión'],
+  };
+  const [cls, text] = map[state] || ['', state];
+  if (cls) { dot.classList.add(cls); lbl.classList.add(cls); }
+  lbl.textContent = text;
+}
+
+async function loadFromDB() {
+  const { data, error } = await db.from('map_state').select('data').eq('id','main').single();
+  if (error) { console.error('Load error:', error); return; }
+  if (data?.data?.cats) applyRemoteState(data.data, true);
+}
+
+function applyRemoteState(state, force = false) {
+  if (!force && saveTimer !== null) return; // local pending changes win
+  applyingRemote = true;
+
+  if (state.customContent) Object.assign(customContent, state.customContent);
+  if (state.subChecked)    Object.assign(subChecked,    state.subChecked);
+
+  if (state.cats && Array.isArray(state.cats)) {
+    const remoteIds = new Set(state.cats.map(c => c.id));
+
+    // Remove cats no longer present
+    for (let i = cats.length - 1; i >= 0; i--) {
+      if (!remoteIds.has(cats[i].id)) {
+        if (nodeMap[cats[i].id]) { canvas.removeChild(nodeMap[cats[i].id].el); delete nodeMap[cats[i].id]; }
+        cats.splice(i, 1);
+      }
+    }
+
+    // Add or update
+    state.cats.forEach(rc => {
+      const idx = cats.findIndex(c => c.id === rc.id);
+      if (idx === -1) {
+        cats.push({ ...rc });
+        buildCatEl(cats[cats.length - 1]);
+      } else {
+        cats[idx] = { ...rc };
+        if (nodeMap[rc.id]) {
+          nodeMap[rc.id].pos = { x: rc.x, y: rc.y };
+          nodeMap[rc.id].el.style.left = rc.x + 'px';
+          nodeMap[rc.id].el.style.top  = rc.y + 'px';
+        }
+        refreshCat(cats[idx]);
+      }
+    });
+
+    drawLines();
+    updateFooter();
+  }
+
+  applyingRemote = false;
+}
+
+function scheduleSave() {
+  if (applyingRemote) return;
+  setSyncStatus('pending');
+  clearTimeout(saveTimer);
+  saveTimer = setTimeout(saveNow, 800);
+}
+
+async function saveNow() {
+  saveTimer = null;
+  const snapshot = cats.map(cat => {
+    const pos = nodeMap[cat.id] ? nodeMap[cat.id].pos : { x: cat.x, y: cat.y };
+    return { ...cat, x: Math.round(pos.x), y: Math.round(pos.y), _addOpen: false };
+  });
+  const { error } = await db.from('map_state')
+    .update({ data: { cats: snapshot, customContent, subChecked }, updated_at: new Date().toISOString() })
+    .eq('id', 'main');
+  if (error) { console.error('Save error:', error); setSyncStatus('error'); }
+  else setSyncStatus('saved');
+}
+
+function subscribeRealtime() {
+  db.channel('map-sync')
+    .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'map_state', filter: 'id=eq.main' },
+      payload => { applyRemoteState(payload.new.data); })
+    .subscribe(status => {
+      if (status === 'SUBSCRIBED') setSyncStatus('connected');
+      else if (status === 'CLOSED' || status === 'CHANNEL_ERROR') setSyncStatus('offline');
+    });
+}
+
+// ═══════════════════════════════════════
+// DATA
+// ═══════════════════════════════════════
+const SC           = { d:'#4caf50', g:'#2196f3', p:'#333' };
+const STATUS_CYCLE = { d:'g', g:'p', p:'d' };
+
+const CONNS = [
+  {a:'core',b:'ui',    c:'#546e7a',w:1.5},{a:'core',b:'player',c:'#546e7a',w:1.5},
+  {a:'core',b:'econ',  c:'#546e7a',w:2  },{a:'core',b:'social',c:'#546e7a',w:1.5},
+  {a:'core',b:'trans', c:'#546e7a',w:1.5},{a:'core',b:'audio', c:'#546e7a',w:1  },
+  {a:'core',b:'combat',c:'#546e7a',w:1  },
+  {a:'econ',b:'gov',   c:'#2e7d32',w:2  },{a:'econ',b:'player',c:'#2e7d32',w:1.5},
+  {a:'econ',b:'trans', c:'#2e7d32',w:1.5},{a:'econ',b:'social',c:'#2e7d32',w:1.5},
+  {a:'player',b:'social',c:'#880e4f',w:2},{a:'social',b:'combat',c:'#6a1b9a',w:2},
+  {a:'social',b:'gov', c:'#6a1b9a',w:1.5},{a:'social',b:'trans',c:'#6a1b9a',w:1},
+  {a:'gov',b:'trans',  c:'#bf360c',w:1.5},{a:'gov',b:'combat', c:'#bf360c',w:1.5},
+  {a:'combat',b:'gov', c:'#b71c1c',w:1.5},{a:'ui',b:'player',  c:'#006064',w:1 },
+  {a:'trans',b:'combat',c:'#e65100',w:1 },
+];
+
+const cats = [
+  {id:'ui',    l:'UI / UX',        col:'#006064', x:890,  y:60,   w:320, s:[['HUD','p'],['Minimap','p'],['Notificaciones','p'],['Bank UI','p'],['Shop UI','p'],['Phone UI','p'],['Pause/Settings','p'],['Tutorial','p']]},
+  {id:'player',l:'PLAYER',         col:'#880e4f', x:40,   y:340,  w:290, s:[['HealthComponent','d'],['PlayerController','d'],['Home/Apartment','p'],['Sleep System','p'],['Inventario','p'],['Phone System','p'],['Ropa/Apariencia','p'],['Hambre/Necesidades','p'],['Skills / Stats','p'],['Game Over / Respawn','p'],['Interaction System','d']]},
+  {id:'core',  l:'CORE WORLD',     col:'#37474f', x:840,  y:340,  w:320, s:[['TimeManager','d'],['SaveManager','d'],['LevelManager','d'],['CityGenerator','d'],['DayNight Lighting','d'],['Scene Chunking','p'],['Interior System','p'],['Cámara Dinámica','p'],['Loading Screen','p'],['Main Menu','p']]},
+  {id:'econ',  l:'ECONOMÍA',       col:'#1b5e20', x:1390, y:340,  w:295, s:[['CurrencyManager','d'],['BankManager','d'],['EmploymentManager','d'],['Construction Sys','g'],['Shop System','p'],['Property System','p'],['Tax / Gov Budget','p'],['Stock / Inversión','p'],['Mercado Negro','p']]},
+  {id:'gov',   l:'GOBIERNO',       col:'#bf360c', x:1870, y:340,  w:280, s:[['GovernmentManager','p'],['Presupuesto','p'],['Elecciones','p'],['Leyes / Ordenanzas','p'],['Depto. Policía','p'],['Tanques / Militar','p'],['Servicios Públicos','p']]},
+  {id:'social',l:'SOCIAL / NPC',   col:'#4a148c', x:40,   y:1010, w:290, s:[['NPC Movement','d'],['Dialogue System','p'],['Relationship Sys','p'],['NPC Scheduler','p'],['NPC Spawning','p'],['Personalidad / Rasgos','p'],['Facción / Reputación','p'],['Crimen / Consecuencia','p'],['Police AI','p']]},
+  {id:'trans', l:'TRANSPORTE',     col:'#e65100', x:820,  y:1010, w:320, s:[['Vehicle System','g'],['Bus Route Manager','p'],['Fuel System','p'],['Parking Manager','p'],['Tráfico / Pathfinding','p'],['Police Tow Flow','p']]},
+  {id:'combat',l:'COMBATE',        col:'#b71c1c', x:1360, y:1010, w:280, s:[['Combat System','p'],['Weapon System','p'],['Enemy AI','p'],['Gang / Territorio','p'],['Wanted Level','p']]},
+  {id:'audio', l:'AUDIO / POLISH', col:'#4e342e', x:840,  y:1420, w:320, s:[['Audio Manager','p'],['Ambient Sounds','p'],['Music System','p'],['VFX / Partículas','p'],['Camera Shake','p']]},
+];
+
+const INFO = {
+  'TimeManager':           {desc:'Reloj interno del juego. Controla hora y día actual, dispara eventos al pasar cada hora.',subs:['Hora del día (0–24h)','Día actual del juego','Velocidad real→juego configurable','Evento OnHourChanged','Evento OnDayChanged','Pausa durante transiciones de escena','Restauración silenciosa desde SaveData']},
+  'SaveManager':           {desc:'Auto-save sin slots. Escribe save.json + backup en Application.persistentDataPath.',subs:['Auto-save en transición de escena','Auto-save al terminar turno','Auto-save periódico (5 min reales)','Debounce 10 segundos','Backup antes de cada escritura','Fallback a backup si archivo corrupto','Migración por versión de formato','Bloqueo durante IsTransitioning']},
+  'LevelManager':          {desc:'Controla la carga y transición entre escenas del mundo.',subs:['Carga de escenas con Addressables','Pantalla de transición (fade)','Flag IsTransitioning','Evento OnAreaSceneLoaded','Soporte para escenas aditivas','Evita carga duplicada de escena']},
+  'CityGenerator':         {desc:'Genera la ciudad proceduralmente con BSP. Crea distritos, calles, aceras y edificios ancla.',subs:['BSP partitioning para distritos','Clase económica por distrito','Actividad principal por distrito','Calles y aceras en Tilemap','Edificio ancla: banco, apartamento, 4+ empleadores','Semilla reproducible (long seed)','Nombres generados por vocabulario','Registro de lotes vacíos para Construction System']},
+  'DayNight Lighting':     {desc:'Controlador de iluminación 2D global que interpola color e intensidad según la hora.',subs:['4 puntos: noche, amanecer, día, ocaso','Interpolación suave por hora','Intensidad variable','Sincronizado con TimeManager.OnHourChanged','Compatible con URP 2D Global Light']},
+  'Scene Chunking':        {desc:'Carga y descarga dinámica de porciones del mapa para soportar ciudades grandes.',subs:['División del mapa en chunks (32×32 tiles)','Carga por proximidad al jugador','Descarga de chunks lejanos','Pool de chunks activos','Eventos de chunk activado/desactivado','Compatible con CityGenerator']},
+  'Interior System':       {desc:'Permite al jugador entrar y salir de edificios cargando la escena interior.',subs:['Trigger en puerta de entrada','Carga de escena interior','Punto de spawn al entrar y salir','Referencia al edificio en CityData','Sonido de puerta al transitar']},
+  'Cámara Dinámica':       {desc:'Define los límites de la cámara Cinemachine según la zona activa.',subs:['Bounds por PolygonCollider2D de zona','Cambio de bounds al cambiar de área','Zoom configurable interior/exterior','Seguimiento del jugador con damping']},
+  'Loading Screen':        {desc:'Pantalla de carga durante transiciones pesadas entre escenas.',subs:['Barra de progreso async','Tip aleatorio en pantalla','Fade in/out','Tiempo mínimo visible']},
+  'Main Menu':             {desc:'Menú principal con nueva partida, continuar y ajustes.',subs:['Detectar save existente para "Continuar"','Botón Nueva Partida (limpia save)','Botón Ajustes y Créditos','Versión del juego en pantalla']},
+  'HealthComponent':       {desc:'Componente de salud reutilizable para jugador y NPCs.',subs:['currentHealth / maxHealth','TakeDamage(amount)','Heal(amount)','Resurrect() sin eventos','SetHealthPercent() para SaveManager','Evento onDamaged (ratio 0-1)','Evento onDeath','IsAlive bool']},
+  'Home/Apartment':        {desc:'Sistema de vivienda: renta, pago mensual y consecuencias por impago.',subs:['Asignación de apartamento inicial','Pago de renta mensual','Notificación de renta vencida','Desalojo por impago','Interior como escena','Guardar en SaveData','Interacción con cama para Sleep System']},
+  'Sleep System':          {desc:'Dormir restaura energía y avanza el tiempo al siguiente día.',subs:['Interacción con cama en apartamento','Avance de tiempo a mañana siguiente','Restauración de energía y hambre','Penalización por no dormir','Evento OnPlayerSlept','Auto-save al despertar']},
+  'Inventario':            {desc:'Ítems que el jugador puede cargar, usar y descartar con límite de peso.',subs:['Grid de ítems con peso máximo','Tipos: consumible, herramienta, llave, arma','Usar ítem desde inventario','Descartar ítem en el mundo','Bidón de gasolina como ítem','Integración con Shop System','Serialización en SaveData']},
+  'Phone System':          {desc:'Teléfono del jugador con apps de clasificados, empleos, banco y mensajes.',subs:['App Clasificados (vehículos, propiedades)','App Empleos (solicitudes digitales)','App Banco (saldo, estados de cuenta)','Mensajes de texto y callbacks','Notificaciones en banner','Animación de apertura']},
+  'Ropa/Apariencia':       {desc:'Outfits que cambian el sprite del jugador y afectan stats sociales.',subs:['Equipar outfit completo o por piezas','Cambio de sprite según outfit','Stat "presentación" para entrevistas','Tiendas de ropa en el mapa','Guardar outfit en SaveData']},
+  'Hambre/Necesidades':    {desc:'Necesidades básicas: hambre, higiene, energía. Se degradan con el tiempo.',subs:['Barra de hambre (decrece con tiempo)','Comer en restaurante o en casa','Higiene: ducha en apartamento','Nivel de energía / fatiga','Debuffs por necesidades bajas','Integración con HUD']},
+  'Skills / Stats':        {desc:'Habilidades que suben con el uso. Afectan rendimiento en trabajos y combate.',subs:['Conducción','Fuerza','Carisma','Técnica (trabajos especializados)','XP por acción','Nivel 1–10 por habilidad','Efectos pasivos por nivel','Guardar en SaveData']},
+  'Game Over / Respawn':   {desc:'Condición de pérdida del juego y flujo de reinicio o carga de partida.',subs:['Condición: salud = 0','Condición: bancarrota total','Condición: desalojo + sin fondos','Pantalla de Game Over con causa','Cargar último save','Reiniciar partida','Fade out al morir']},
+  'CurrencyManager':       {desc:'Fuente de verdad del dinero. Maneja balance, deudas, pagos e intereses.',subs:['Balance actual','Earn(amount, tag)','Spend(amount, tag)','TakeLoan(obligation)','Procesamiento de obligaciones por día','OnBalanceChanged(float, string)','OnPaymentMissed / OnBankruptcy','Impuesto por transacción "shop:*"']},
+  'BankManager':           {desc:'Gestiona credit score, cooldowns bancarios y escalada de colecciones.',subs:['Credit Score (inicio: 650)','Tiers: Poor / Fair / Good / Excellent','CanBorrowFrom(BankDefinition)','Cooldown por banco tras rechazo','Stages: None→Notif→Compound→Embargo→Bankruptcy','OnCreditScoreChanged','OnCollectionsEscalated','OnEvictionTriggered']},
+  'EmploymentManager':     {desc:'Rastrea empleos, turnos, faltas y pago de salarios del jugador.',subs:['Solicitar empleo (Apply)','Estados: Applied / Offered / Active / Terminated','Score: puntualidad 40% + calidad 40% + actitud 20%','Salario acumulado y pago','Máximo de faltas consecutivas','OnJobOffered, OnShiftStarted, OnWagePaid','Serialización en SaveData']},
+  'Construction Sys':      {desc:'Construir edificios sobre lotes vacíos usando templates ScriptableObject predefinidos.',subs:['Templates como ScriptableObject','Ghost preview al seleccionar template','Un click para anclar posición','Validación de lote vacío','Tile de construcción en Props layer','NPC workers en sitio cada mañana','Salario diario a workers','Completado: edificio en CityData + JobDefinition','NPCs con ambition + capital deciden construir','Gobierno usa tax revenue']},
+  'Shop System':           {desc:'Tiendas donde el jugador compra y vende ítems con precios dinámicos.',subs:['Inventario de tienda','Precio dinámico por demanda y distrito','Compra con CurrencyManager.Spend()','Venta de ítems del inventario','Impuesto por transacción','Shop UI','Restock periódico','Tiendas son employers']},
+  'Property System':       {desc:'Compra, venta y renta de propiedades inmobiliarias.',subs:['Compra en cash o crédito','Registro en CityData','Cobro de renta mensual','Valorización por distrito','Venta con ganancia/pérdida','Hipoteca vía BankManager','Gobierno puede expropiar']},
+  'Tax / Gov Budget':      {desc:'Recolección de impuestos y presupuesto del gobierno.',subs:['Impuesto mensual a empleadores (15%)','Impuesto por transacción (8%)','Treasury balance','Gasto en parques y cívicos','Umbral mínimo para gastar','Visible al trabajar en gobierno','Déficit → recorte de servicios']},
+  'Stock / Inversión':     {desc:'Mercado de valores simplificado para invertir dinero.',subs:['Empresas cotizantes','Precio de acción dinámico','Comprar/vender acciones','Ganancia/pérdida por diferencial','Correlación con economía del mapa','Impuesto sobre ganancias']},
+  'Mercado Negro':         {desc:'Economía paralela ilegal con ítems y servicios prohibidos.',subs:['Vendedores NPC en zonas derelictas','Ítems ilegales','Precios variables y riesgo de estafa','Consecuencia policial','Reputación en facciones criminales','Sin impuesto (off-record)']},
+  'Vehicle System':        {desc:'Vehículos manejables por jugador y NPCs con sprites 4-dir y economía de combustible.',subs:['8 tipos de vehículo','Sprites 4-direccionales interpolados','Solo en road tiles','Colisión entre vehículos terrestres','Helicópteros en capa aérea','Auto eléctrico: +15% vel, +40% drain','Compra en concesionaria o clasificados','Crédito con evaluación bancaria','Tanques y helicópteros solo gobierno']},
+  'Bus Route Manager':     {desc:'Rutas fijas de bus con paradas donde NPCs y el jugador pueden subir.',subs:['BusRouteDefinition como ScriptableObject','Waypoints en tiles de carretera','Paradas (BusStop tiles)','Dwell time 3 segundos','NPCs abordan/desabordan','Jugador puede subirse/bajarse','Empleo: sueldo al completar ruta']},
+  'Fuel System':           {desc:'Combustible y carga eléctrica con advertencias progresivas.',subs:['fuelLevel 0–1 por vehículo','Drain por tile recorrido','Warning al 20%, crítico al 5%','Vehículo se detiene a 0','Gasolinera: rellenar pagando','Charging station para eléctricos','Bidón de gasolina: ítem +30%']},
+  'Parking Manager':       {desc:'Gestión de espacios válidos y detección de infractores.',subs:['Tiles con tag P en calles','Parking lots de edificios','Detección de parqueo ilegal','Timer de gracia antes de grúa','Reserva de espacio al parquear','Integración con Police Tow Flow']},
+  'Tráfico / Pathfinding': {desc:'Navegación autónoma de vehículos NPC por carreteras.',subs:['A* o Flowfield sobre road tiles','NPCs navegan a destino','Respeto de colisiones','Deadlock resolution (back-up 1 tile)','Spawn en puntos de carretera','Tanques empujan vehículos']},
+  'Police Tow Flow':       {desc:'Flujo completo: detección → grúa → depósito → recuperación → subasta.',subs:['Patrullaje de NPC policía','Grúa lleva a estación','Notificación al dueño','Multa base + tarifa por hora','Interacción en escritorio de estación','Subasta si no se recupera en 7 días']},
+  'NPC Movement':          {desc:'Sistema de movimiento autónomo para NPCs usando A* Pathfinding Project (AIPath). Gestiona estados de movimiento y wander alrededor del spawn point.',subs:['Estado Idle: espera entre movimientos','Estado Wandering: elige punto aleatorio dentro de wanderRadius','Estado Walking: destino asignado por NPCScheduler','Estado Hurt: pausa movimiento por hurtDuration','Estado Dead: desactiva pathfinding permanentemente','Estado InDialogue: congela movimiento durante conversación','GridGraph baked sobre city tilemap','AIPath con orientation=YAxisForward y gravity=None','Stuck detection: cancela target tras stuckTimeout sin movimiento','Animación conducida por ai.velocity → movX/movY/IsWalking','Accessories recogidos un frame después de CharacterClothesHandler.Randomize','API pública: SetDestination(), EnterDialogue(), ExitDialogue(), OnHurt(), OnDead()']},
+  'Dialogue System':       {desc:'Conversaciones entre jugador y NPCs con árboles de diálogo y efectos.',subs:['DialogueAsset como ScriptableObject','Nodos con opciones de respuesta','Condiciones de disponibilidad','Efectos de diálogo','Entrevistas de empleo','Cita con asesor bancario','Cámara en close-up durante diálogo']},
+  'Relationship Sys':      {desc:'Rastreo de relaciones jugador–NPC de -100 a 100.',subs:['Score de relación por NPC','Categorías: Desconocido → Conocido → Amigo → Pareja','Cambios por diálogo, regalo, acción','Decaimiento por tiempo sin interacción','Efectos en precios y contratación']},
+  'NPC Scheduler':         {desc:'Rutinas diarias de NPCs: trabajo, hogar, ocio, compras.',subs:['Rutina diaria por tipo de NPC','Ir al trabajo','Regresar al hogar','Tiempo libre en zonas de ocio','Dormir de noche','Comprar en tiendas','Conducir su vehículo','Sincronizado con TimeManager']},
+  'NPC Spawning':          {desc:'Generación dinámica de NPCs según la hora y el distrito activo.',subs:['Pool de NPCs reutilizables','Spawn por chunk activo','Densidad por distrito y hora','Tipos de NPC por actividad del distrito','Despawn al alejarse','NPCs persistentes (empleadores, banqueros)']},
+  'Personalidad / Rasgos': {desc:'Rasgos que determinan el comportamiento autónomo de los NPCs.',subs:['Ambición 0–1 (decide si construye)','Riesgo (invierte en mercado negro)','Sociabilidad (frecuencia de diálogo)','Honestidad (probabilidad de estafa)','Capital mínimo para decisiones']},
+  'Facción / Reputación':  {desc:'Grupos de poder. La reputación del jugador con cada facción afecta el mundo.',subs:['Gobierno municipal','Fuerza policial','Facciones criminales','Gremio comercial','Score de reputación por facción','Efectos: precios, hostilidad, acceso','Facciones en conflicto entre sí']},
+  'Crimen / Consecuencia': {desc:'Infracciones del jugador y sistema de consecuencias proporcional.',subs:['Tipos de crimen','Wanted Level 1–5','Policía responde según nivel','Soborno para reducir Wanted','Antecedentes afectan credit score','Tiempo en prisión como máxima pena']},
+  'Police AI':             {desc:'Comportamiento autónomo de NPCs policiales.',subs:['Patrullaje por ruta en distrito','Detección de crimen cercano','Persecución en vehículo o a pie','Arresto si atrapa al jugador','Detección de parqueo ilegal','Refuerzos en Wanted Level alto','Helicóptero policial en nivel máximo']},
+  'GovernmentManager':     {desc:'Cerebro del gobierno. Toma decisiones de gasto, construcción y respuesta.',subs:['Treasury balance','Umbral de gasto ($10k)','Construir parques automáticamente','Respuesta a distritos bajo-servidos','Relación con PoliceDept y Military','Log de decisiones']},
+  'Presupuesto':           {desc:'Ingresos por impuestos y egresos por servicios y obras del gobierno.',subs:['Ingresos: impuesto mensual','Ingresos: impuesto por transacción','Egresos: construcción cívica','Egresos: sueldos empleados gov','Egresos: servicios públicos','Déficit → recorte de servicios']},
+  'Elecciones':            {desc:'Ciclo electoral que puede cambiar políticas del gobierno.',subs:['Ciclo cada N días de juego','Candidatos con plataformas distintas','Votación de NPCs según satisfacción','Jugador puede votar','Ganador cambia taxRate o prioridades','Evento OnElectionResult']},
+  'Leyes / Ordenanzas':    {desc:'Reglas del mundo que el gobierno puede aprobar o derogar.',subs:['Toque de queda nocturno','Zonas de no-parqueo','Impuesto especial por distrito','Prohibición de vehículos en zona','Permisos de construcción','Efecto inmediato al aprobar']},
+  'Depto. Policía':        {desc:'Departamento policial como institución con presupuesto y efectivos.',subs:['Número de NPCs policiales activos','Cobertura por distrito','Presupuesto asignado por gobierno','Escala de respuesta por Wanted Level','Estación de policía como building','Impound lot en la estación']},
+  'Tanques / Militar':     {desc:'Fuerza militar solo para el gobierno. Aparece en eventos extremos.',subs:['Solo propiedad del gobierno','Activación por Wanted Level 5','Patrullaje en zonas de conflicto','Empuja vehículos más pequeños','Helicópteros militares','No disponible para el jugador (MVP)']},
+  'Servicios Públicos':    {desc:'Agua, luz y recolección de basura financiados por el gobierno.',subs:['Cobertura por distrito','Financiado por presupuesto del gobierno','Recorte si hay déficit','Impacto en calidad de vida de NPCs','Camión de basura visible','Corte de luz → interiores oscuros']},
+  'PlayerController':      {desc:'Sistema nervioso central del jugador. Dueño del movimiento, dirección de facing, máquina de estados y dispatch de animaciones.',subs:['8 estados: Normal, Carry, Sit, Sleep, InVehicle, InDialogue, InCombat, Dead','Movimiento top-down suave 4-direccional','Input con New Input System (InputActionAsset)','Facing por último eje dominante, persiste al detenerse','effectiveSpeed = baseSpeed × stateMultiplier','Rigidbody2D + CapsuleCollider2D (pies únicamente)','RequestStateChange() aceptado o rechazado por estado actual','Posición + facing serializados por SaveManager']},
+  'Interaction System':    {desc:'Dispatcher entre el jugador y todo objeto interactuable del mundo.',subs:['IInteractable interface','InteractionDetector (OverlapCircle 1.2 tiles)','Prompt contextual [E] + label','Un solo prompt visible a la vez','11 InteractionTypes → animaciones del sprite','Carry State (lift, push cart, throw)','Sit State (silla, sofá, banca)','Prioridad por distancia + tipo','Deshabilitado dentro de vehículo']},
+  'HUD':                   {desc:'Heads-Up Display con información vital del jugador siempre visible.',subs:['Barra de salud','Dinero disponible','Hora y día del juego','Indicador de hambre/necesidades','Indicador de combustible','Nivel de Wanted','Notificaciones flotantes','Minimizable']},
+  'Minimap':               {desc:'Mapa pequeño del distrito con posición del jugador y puntos de interés.',subs:['Posición del jugador en tiempo real','Calles y bloques del distrito','Íconos de POI','Zona de parqueo disponible','Expandible a mapa completo']},
+  'Notificaciones':        {desc:'Banners, toasts y alertas para informar al jugador de eventos del mundo.',subs:['Toast de income / payment / alert','Banner de empleo ofrecido','Alerta de combustible bajo','Alerta de grúa policial','Alerta de renta vencida','Notificación de construcción completada','Cola de notificaciones']},
+  'Bank UI':               {desc:'Interfaz bancaria: saldo, préstamos, crédito y deudas.',subs:['Resumen de cuenta','Historial de transacciones','Préstamos activos y progreso','Solicitar préstamo','Credit score y tier actual','Estado de colecciones activas']},
+  'Shop UI':               {desc:'Interfaz de tienda para comprar y vender ítems.',subs:['Grid de ítems disponibles','Precio y stock visible','Comparación con inventario','Botón comprar / vender','Filtro por categoría','Confirmación de compra']},
+  'Phone UI':              {desc:'Interfaz del teléfono con apps y notificaciones push.',subs:['Pantalla de inicio con apps','App Clasificados','App Empleos','App Banco','App Mensajes y callbacks','Animación de apertura']},
+  'Pause/Settings':        {desc:'Menú de pausa y configuración del juego.',subs:['Pausa del tiempo','Control de volumen','Velocidad del tiempo','Resolución y pantalla completa','Guardar y volver al Main Menu','Keybindings']},
+  'Tutorial':              {desc:'Tutoriales contextuales que guían al jugador en sus primeras acciones.',subs:['Trigger por primera vez en evento','Overlay con flecha y texto','Pasos secuenciales','Tutorial de movimiento','Tutorial de empleo','Tutorial de banco','Tutorial de conducción','Opción de saltar']},
+  'Audio Manager':         {desc:'Sistema central de audio con pools de AudioSource.',subs:['Pool de AudioSource para SFX','Reproducción 2D y 3D posicional','Control de volumen por categoría','Fade in/out de música','Loops ambientales','Sin solapamiento de SFX iguales']},
+  'Ambient Sounds':        {desc:'Sonidos ambientales dinámicos según zona y hora del día.',subs:['Lluvia, viento, pájaros según hora','Tráfico urbano en zonas comerciales','Ambiente según EconomicClass','Fade entre zonas al moverse','Interior con reverb / exterior muffled']},
+  'Music System':          {desc:'Música dinámica que cambia según el estado del jugador.',subs:['Track por estado: explorar, empleo, persecución, interior','Crossfade suave entre tracks','Variaciones por hora del día','Música tensa en Wanted Level alto','Sistema de stems']},
+  'VFX / Partículas':      {desc:'Efectos visuales de partículas para feedback de eventos.',subs:['Polvo al correr','Humo de vehículo bajo en combustible','Destello al recoger dinero','Partículas en sitio de construcción','Efecto de impacto en combate','Pool de partículas para rendimiento']},
+  'Camera Shake':          {desc:'Vibración de cámara para feedback de eventos impactantes.',subs:['Shake al recibir daño','Shake en explosiones cercanas','Shake al chocar vehículo','Intensidad y duración configurables','Trauma-based (Cinemachine Impulse)']},
+  'Combat System':         {desc:'Sistema de combate cuerpo a cuerpo y a distancia.',subs:['Ataque básico cuerpo a cuerpo','Ataque a distancia','Hitbox y hurtbox','Knockback por impacto','Animaciones 4-dir de ataque','Cooldown entre ataques','Integración con HealthComponent']},
+  'Weapon System':         {desc:'Armas con tipos, munición, daño y equipamiento desde el inventario.',subs:['Tipos: puños, cuchillo, pistola, rifle','Munición limitada','Equipar desde Inventario','Daño base + modificador Skills','Armas ilegales vía Mercado Negro','Decomiso por policía']},
+  'Enemy AI':              {desc:'IA de enemigos con estados de patrullaje, alerta y ataque.',subs:['Estados: Idle, Patrol, Alert, Chase, Attack','Rango de visión y escucha','Persecución del jugador','Retiro si salud baja','Llamar refuerzos','Drop de ítems al morir']},
+  'Gang / Territorio':     {desc:'Pandillas con control territorial que reaccionan al jugador.',subs:['Pandillas con territorio en mapa','Hostilidad sin reputación positiva','Misiones para pandillas','Conflictos entre pandillas','Efecto en precios de Mercado Negro','Líder como NPC especial']},
+  'Wanted Level':          {desc:'Nivel de búsqueda policial que escala con la gravedad de las acciones.',subs:['Niveles 1–5','Nivel 1: policías te buscan','Nivel 3: patrullas adicionales','Nivel 5: militar y tanques','Decrece con el tiempo escondido','Soborno reduce nivel','Arrestado: pierde armas y paga multa']},
+};
+
+let customContent = {};
+function getCC(name) {
+  if (!customContent[name]) customContent[name] = { desc: null, blocks: [] };
+  return customContent[name];
+}
+
+// ═══════════════════════════════════════
+// STATE
+// ═══════════════════════════════════════
+const subChecked = {};
+const nodeMap    = {};
+let scale=0.72, panX=60, panY=20;
+let activeChip=null, currentSys=null;
+const canvas  = document.getElementById('canvas');
+const svgEl   = document.getElementById('lines');
+const wrap    = document.getElementById('wrap');
+const sidebar = document.getElementById('sidebar');
+const ROW=26, PAD=8, HDR=34;
+
+function boxH(cat){return HDR+PAD+Math.ceil(cat.s.length/2)*ROW+PAD+(cat._addOpen?30:0);}
+function centerOf(cat){const p=nodeMap[cat.id]?nodeMap[cat.id].pos:{x:cat.x,y:cat.y};return{x:p.x+cat.w/2,y:p.y+boxH(cat)/2};}
+
+// ═══════════════════════════════════════
+// RENDER
+// ═══════════════════════════════════════
+function renderAll(){cats.forEach(c=>nodeMap[c.id]?refreshCat(c):buildCatEl(c));updateFooter();drawLines();}
+
+function buildCatEl(cat){
+  const pos={x:cat.x,y:cat.y};
+  const box=document.createElement('div');
+  box.className='cat-box';
+  box.style.cssText=`left:${pos.x}px;top:${pos.y}px;width:${cat.w}px`;
+  const inner=document.createElement('div');
+  inner.className='cat-inner';
+  inner.style.cssText=`border:1px solid ${cat.col}44;border-radius:10px`;
+  inner.appendChild(buildHeader(cat));
+  inner.appendChild(buildGrid(cat));
+  box.appendChild(inner);
+  canvas.appendChild(box);
+  nodeMap[cat.id]={el:box,pos};
+  addDragBehavior(box,cat);
+}
+function refreshCat(cat){
+  const inner=nodeMap[cat.id].el.querySelector('.cat-inner');
+  inner.replaceChild(buildHeader(cat),inner.querySelector('.cat-header'));
+  inner.replaceChild(buildGrid(cat),inner.querySelector('.cat-grid'));
+}
+function buildHeader(cat){
+  const done=cat.s.filter(x=>x[1]==='d').length,gdd=cat.s.filter(x=>x[1]==='g').length;
+  const hdr=document.createElement('div');
+  hdr.className='cat-header';hdr.style.background=cat.col;
+  hdr.innerHTML=`<span class="cat-label">${cat.l}</span><span class="cat-count">${done}✓ ${gdd>0?gdd+'◈ ':''}${cat.s.length-done-gdd}○</span>`;
+  const addBtn=mkEl('button','hdr-btn hdr-add','+');
+  noMD(addBtn);addBtn.onclick=e=>{e.stopPropagation();toggleAddForm(cat);};
+  const delBtn=mkEl('button','hdr-btn hdr-del','×');
+  noMD(delBtn);delBtn.onclick=e=>{e.stopPropagation();if(confirm(`¿Eliminar "${cat.l}"?`))deleteCategory(cat.id);};
+  hdr.append(addBtn,delBtn);return hdr;
+}
+function buildGrid(cat){
+  const grid=document.createElement('div');grid.className='cat-grid';
+  cat.s.forEach(([name,st],idx)=>{
+    const chip=document.createElement('div');
+    chip.className='chip '+(st==='d'?'done':st==='g'?'gdd':'pending');
+    const dot=mkEl('span','chip-dot');dot.style.background=SC[st];
+    noMD(dot);dot.onclick=e=>{e.stopPropagation();cycleStatus(cat,idx);};
+    const lbl=mkEl('span','chip-name',name);
+    const xBtn=mkEl('button','chip-x','×');
+    noMD(xBtn);xBtn.onclick=e=>{e.stopPropagation();deleteSystem(cat.id,idx);};
+    chip.append(dot,lbl,xBtn);
+    chip.onclick=e=>{if(e.target===dot||e.target===xBtn)return;setActiveChip(chip);openSidebar(name,cat);};
+    grid.appendChild(chip);
+  });
+  if(cat._addOpen){
+    const row=document.createElement('div');row.className='add-row';
+    const inp=document.createElement('input');inp.type='text';inp.placeholder='Nombre del sistema...';
+    const sel=document.createElement('select');sel.innerHTML='<option value="p">○ Pend.</option><option value="g">◈ GDD</option><option value="d">✓ Impl.</option>';
+    const ok=mkEl('button','add-ok','✓');const cancel=mkEl('button','add-cancel','×');
+    [inp,sel,ok,cancel].forEach(noMD);
+    ok.onclick=()=>{const n=inp.value.trim();if(n){cat.s.push([n,sel.value]);cat._addOpen=false;refreshCat(cat);drawLines();updateFooter();scheduleSave();}};
+    cancel.onclick=()=>{cat._addOpen=false;refreshCat(cat);};
+    inp.addEventListener('keydown',e=>{if(e.key==='Enter')ok.click();if(e.key==='Escape')cancel.click();e.stopPropagation();});
+    row.append(inp,sel,ok,cancel);grid.appendChild(row);
+    requestAnimationFrame(()=>inp.focus());
+  }
+  return grid;
+}
+function mkEl(tag,cls,txt){const e=document.createElement(tag);if(cls)e.className=cls;if(txt!==undefined)e.textContent=txt;return e;}
+function noMD(e){e.addEventListener('mousedown',ev=>ev.stopPropagation());}
+
+// ═══════════════════════════════════════
+// SIDEBAR
+// ═══════════════════════════════════════
+function setActiveChip(chip){if(activeChip)activeChip.classList.remove('active-chip');activeChip=chip;if(chip)chip.classList.add('active-chip');}
+
+function openSidebar(name,cat){
+  currentSys=name;
+  const info=INFO[name];const cc=getCC(name);
+  const sys=cat.s.find(s=>s[0]===name);const st=sys?sys[1]:'p';
+  document.getElementById('sb-color-bar').style.background=cat.col;
+  document.getElementById('sb-name').textContent=name;
+  document.getElementById('sb-cat-label').textContent=cat.l;
+  const badge=document.getElementById('sb-badge');
+  badge.className='sb-badge '+st;
+  document.getElementById('sb-status-text').textContent=st==='d'?'Implementado':st==='g'?'GDD Listo':'Pendiente';
+  const descEl=document.getElementById('sb-desc');
+  descEl.textContent=cc.desc!==null?cc.desc:(info?info.desc:'');
+  descEl.oninput=()=>{getCC(currentSys).desc=descEl.textContent;scheduleSave();};
+  const ul=document.getElementById('sb-subs');ul.innerHTML='';
+  const subs=info?info.subs:[];
+  if(subs.length>0){
+    subs.forEach((sub,i)=>{
+      const key=name+'::'+i;const checked=!!subChecked[key];
+      const li=document.createElement('li');li.className='sb-sub'+(checked?' checked':'');
+      const ck=mkEl('span','sb-check',checked?'☑':'☐');
+      const tx=mkEl('span','sb-sub-text',sub);
+      li.append(ck,tx);
+      li.onclick=()=>{subChecked[key]=!subChecked[key];li.className='sb-sub'+(subChecked[key]?' checked':'');ck.textContent=subChecked[key]?'☑':'☐';updateProgress(name,subs.length);scheduleSave();};
+      ul.appendChild(li);
+    });
+    updateProgress(name,subs.length);
+  }else{
+    ul.innerHTML='<li class="sb-empty">Sin subtemas definidos.</li>';
+    document.getElementById('sb-progress').textContent='';
+  }
+  renderBlocks(name);
+  sidebar.classList.add('open');
+  document.getElementById('sb-add-menu').classList.remove('show');
+}
+
+function updateProgress(name,total){
+  const done=Object.entries(subChecked).filter(([k,v])=>k.startsWith(name+'::')&&v).length;
+  const el=document.getElementById('sb-progress');
+  el.innerHTML=done===0?`<span style="color:#2a2a2a">${total} items</span>`:`<span>${done}/${total}</span> done`;
+}
+function closeSidebar(){sidebar.classList.remove('open');setActiveChip(null);currentSys=null;}
+document.addEventListener('keydown',e=>{if(e.key==='Escape')closeSidebar();});
+
+// ═══════════════════════════════════════
+// BLOCKS
+// ═══════════════════════════════════════
+const TYPE_LABELS={title:'T',subtitle:'S',body:'¶'};
+function renderBlocks(name){
+  const cc=getCC(name);
+  const container=document.getElementById('sb-blocks');container.innerHTML='';
+  cc.blocks.forEach(b=>{
+    const block=document.createElement('div');block.className='sb-block '+b.type;
+    const badge=mkEl('span','sb-block-type',TYPE_LABELS[b.type]);
+    const text=document.createElement('div');text.className='sb-block-text';
+    text.contentEditable='true';text.spellcheck=false;text.textContent=b.text;
+    text.oninput=()=>{b.text=text.textContent;scheduleSave();};
+    text.addEventListener('mousedown',e=>e.stopPropagation());
+    text.addEventListener('keydown',e=>{if(e.key==='Enter'&&!e.shiftKey&&b.type!=='body')e.preventDefault();e.stopPropagation();});
+    const del=mkEl('button','sb-block-del','×');
+    del.addEventListener('mousedown',e=>e.stopPropagation());
+    del.onclick=()=>{cc.blocks=cc.blocks.filter(x=>x.id!==b.id);renderBlocks(name);scheduleSave();};
+    block.append(badge,text,del);container.appendChild(block);
+    if(b.text==='')requestAnimationFrame(()=>text.focus());
+  });
+}
+function toggleAddMenu(){document.getElementById('sb-add-menu').classList.toggle('show');}
+function addBlock(type){
+  if(!currentSys)return;
+  const cc=getCC(currentSys);
+  cc.blocks.push({id:Date.now().toString(),type,text:''});
+  renderBlocks(currentSys);
+  document.getElementById('sb-add-menu').classList.remove('show');
+  scheduleSave();
+}
+document.addEventListener('click',e=>{
+  const menu=document.getElementById('sb-add-menu');
+  if(menu.classList.contains('show')&&!document.getElementById('sb-add-wrap').contains(e.target))
+    menu.classList.remove('show');
+});
+
+// ═══════════════════════════════════════
+// MUTATIONS
+// ═══════════════════════════════════════
+function toggleAddForm(cat){cat._addOpen=!cat._addOpen;refreshCat(cat);}
+function deleteSystem(catId,idx){const c=cats.find(x=>x.id===catId);c.s.splice(idx,1);refreshCat(c);drawLines();updateFooter();scheduleSave();}
+function cycleStatus(cat,idx){cat.s[idx][1]=STATUS_CYCLE[cat.s[idx][1]];refreshCat(cat);updateFooter();scheduleSave();}
+function deleteCategory(id){
+  const i=cats.findIndex(c=>c.id===id);if(i===-1)return;
+  canvas.removeChild(nodeMap[id].el);delete nodeMap[id];cats.splice(i,1);
+  drawLines();updateFooter();closeSidebar();scheduleSave();
+}
+function addCategory(label,col){
+  const id='cat_'+Date.now();
+  cats.push({id,l:label.toUpperCase(),col,x:200,y:200,w:280,s:[]});
+  buildCatEl(cats[cats.length-1]);updateFooter();drawLines();scheduleSave();
+}
+
+// ═══════════════════════════════════════
+// DRAG
+// ═══════════════════════════════════════
+function addDragBehavior(box,cat){
+  let dragging=false,ox=0,oy=0;
+  box.addEventListener('mousedown',e=>{
+    if(e.button!==0)return;
+    const t=e.target;
+    if(t.tagName==='BUTTON'||t.tagName==='INPUT'||t.tagName==='SELECT'||t.contentEditable==='true')return;
+    e.stopPropagation();dragging=true;box.classList.add('dragging');
+    const p=nodeMap[cat.id].pos;ox=e.clientX/scale-p.x;oy=e.clientY/scale-p.y;
+    window.addEventListener('mousemove',onDrag);window.addEventListener('mouseup',onUp);
+  });
+  function onDrag(e){if(!dragging)return;const nx=e.clientX/scale-ox,ny=e.clientY/scale-oy;nodeMap[cat.id].pos={x:nx,y:ny};box.style.left=nx+'px';box.style.top=ny+'px';drawLines();}
+  function onUp(){dragging=false;box.classList.remove('dragging');window.removeEventListener('mousemove',onDrag);window.removeEventListener('mouseup',onUp);scheduleSave();}
+}
+
+// ═══════════════════════════════════════
+// SVG LINES
+// ═══════════════════════════════════════
+function drawLines(){
+  while(svgEl.firstChild)svgEl.removeChild(svgEl.firstChild);
+  CONNS.forEach(({a,b,c,w})=>{
+    const ca=cats.find(x=>x.id===a),cb=cats.find(x=>x.id===b);
+    if(!ca||!cb||!nodeMap[a]||!nodeMap[b])return;
+    const A=centerOf(ca),B=centerOf(cb),mx=(A.x+B.x)/2;
+    const p=document.createElementNS('http://www.w3.org/2000/svg','path');
+    p.setAttribute('d',`M${A.x},${A.y} C${mx},${A.y} ${mx},${B.y} ${B.x},${B.y}`);
+    p.setAttribute('stroke',c);p.setAttribute('stroke-width',w||1.5);
+    p.setAttribute('fill','none');p.setAttribute('stroke-opacity','0.25');
+    svgEl.appendChild(p);
+  });
+}
+
+// ═══════════════════════════════════════
+// PAN / ZOOM
+// ═══════════════════════════════════════
+let panning=false,px0=0,py0=0;
+wrap.addEventListener('mousedown',e=>{if(e.button!==0&&e.button!==1)return;panning=true;px0=e.clientX-panX;py0=e.clientY-panY;wrap.classList.add('panning');});
+window.addEventListener('mousemove',e=>{if(!panning)return;panX=e.clientX-px0;panY=e.clientY-py0;applyTransform();});
+window.addEventListener('mouseup',()=>{panning=false;wrap.classList.remove('panning');});
+wrap.addEventListener('wheel',e=>{
+  e.preventDefault();
+  const d=e.deltaY>0?-0.08:0.08,rect=wrap.getBoundingClientRect();
+  const mx=e.clientX-rect.left,my=e.clientY-rect.top;
+  const ns=Math.min(Math.max(scale+d,0.15),3);
+  panX=mx-(mx-panX)*(ns/scale);panY=my-(my-panY)*(ns/scale);scale=ns;applyTransform();
+},{passive:false});
+function zoomBy(d){const ns=Math.min(Math.max(scale+d,0.15),3);const mx=wrap.clientWidth/2,my=wrap.clientHeight/2;panX=mx-(mx-panX)*(ns/scale);panY=my-(my-panY)*(ns/scale);scale=ns;applyTransform();}
+function resetView(){scale=0.72;panX=60;panY=20;applyTransform();}
+function applyTransform(){canvas.style.transform=`translate(${panX}px,${panY}px) scale(${scale})`;}
+
+// ═══════════════════════════════════════
+// MODAL
+// ═══════════════════════════════════════
+function openModal(){document.getElementById('modal-bg').classList.add('show');document.getElementById('m-name').focus();}
+function closeModal(){document.getElementById('modal-bg').classList.remove('show');}
+function confirmModal(){const n=document.getElementById('m-name').value.trim(),c=document.getElementById('m-color').value;if(!n)return;addCategory(n,c);document.getElementById('m-name').value='';closeModal();}
+document.getElementById('m-name').addEventListener('keydown',e=>{if(e.key==='Enter')confirmModal();if(e.key==='Escape')closeModal();});
+document.getElementById('modal-bg').addEventListener('click',e=>{if(e.target===e.currentTarget)closeModal();});
+
+// ═══════════════════════════════════════
+// FOOTER
+// ═══════════════════════════════════════
+function updateFooter(){
+  const all=cats.flatMap(c=>c.s);
+  const done=all.filter(x=>x[1]==='d').length,gdd=all.filter(x=>x[1]==='g').length;
+  document.getElementById('footer').textContent=`${all.length} sistemas · ${done} implementados · ${gdd} con GDD · ${all.length-done-gdd} pendientes`;
+}
+
+// ═══════════════════════════════════════
+// INIT
+// ═══════════════════════════════════════
+applyTransform();
+setSyncStatus('connecting');
+loadFromDB().then(() => {
+  if (!nodeMap[cats[0]?.id]) renderAll();
+  subscribeRealtime();
+});
+</script>
+</body>
+</html>
