@@ -286,7 +286,8 @@ svg#lines { position: absolute; top: 0; left: 0; pointer-events: none; overflow:
 // ═══════════════════════════════════════
 const SUPA_URL = 'https://jzlbacoxajcodnoytcsv.supabase.co';
 const SUPA_KEY = 'sb_publishable_olXNAE19HldONgXL1WvRnA_4S-9sOPZ';
-const db = window.supabase.createClient(SUPA_URL, SUPA_KEY);
+let db = null;
+try { db = window.supabase?.createClient(SUPA_URL, SUPA_KEY); } catch(e) { console.warn('Supabase init failed', e); }
 
 let saveTimer   = null;
 let applyingRemote = false;
@@ -310,8 +311,9 @@ function setSyncStatus(state) {
 }
 
 async function loadFromDB() {
+  if (!db) { setSyncStatus('offline'); return; }
   const { data, error } = await db.from('map_state').select('data').eq('id','main').single();
-  if (error) { console.error('Load error:', error); return; }
+  if (error) { console.error('Load error:', error); setSyncStatus('offline'); return; }
   if (data?.data?.cats) applyRemoteState(data.data, true);
 }
 
@@ -361,6 +363,7 @@ function scheduleSave() {
 
 async function saveNow() {
   saveTimer = null;
+  if (!db) { setSyncStatus('offline'); return; }
   const snapshot = cats.map(cat => {
     const pos = nodeMap[cat.id] ? nodeMap[cat.id].pos : { x: cat.x, y: cat.y };
     return { ...cat, x: Math.round(pos.x), y: Math.round(pos.y), _addOpen: false };
@@ -373,6 +376,7 @@ async function saveNow() {
 }
 
 function subscribeRealtime() {
+  if (!db) return;
   db.channel('map-sync')
     .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'map_state', filter: 'id=eq.main' },
       payload => { applyRemoteState(payload.new.data); })
@@ -828,11 +832,12 @@ function updateFooter(){
 // INIT
 // ═══════════════════════════════════════
 applyTransform();
+renderAll(); // always render from local defaults immediately
+
 setSyncStatus('connecting');
-loadFromDB().then(() => {
-  if (!nodeMap[cats[0]?.id]) renderAll();
-  subscribeRealtime();
-});
+loadFromDB()
+  .then(() => subscribeRealtime())
+  .catch(() => setSyncStatus('offline'));
 </script>
 </body>
 </html>
