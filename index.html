@@ -27,6 +27,8 @@ button.tbtn {
 button.tbtn:hover { background: #222; color: #bbb; border-color: #444; }
 button.tbtn.accent { background: #1a2e1a; border-color: #2a4a2a; color: #6abf69; }
 button.tbtn.accent:hover { background: #1f3a1f; color: #81c784; }
+button.tbtn:disabled { opacity: 0.4; cursor: not-allowed; }
+button.tbtn:disabled:hover { background: #1a1a1a; border-color: #2a2a2a; color: #666; }
 
 #sync-dot {
   width: 7px; height: 7px; border-radius: 50%; background: #3a3a3a;
@@ -237,6 +239,9 @@ svg#lines { position: absolute; top: 0; left: 0; pointer-events: none; overflow:
     <button class="tbtn" onclick="zoomBy(0.12)">＋</button>
     <button class="tbtn" onclick="zoomBy(-0.12)">－</button>
     <button class="tbtn" onclick="resetView()">Reset</button>
+    <div class="sep"></div>
+    <button class="tbtn" id="undo-btn" onclick="undo()" title="Deshacer">↶</button>
+    <button class="tbtn" id="redo-btn" onclick="redo()" title="Rehacer">↷</button>
     <div class="sep"></div>
     <button class="tbtn" onclick="openModal()">＋ Cat</button>
   </div>
@@ -529,6 +534,63 @@ const wrap    = document.getElementById('wrap');
 const sidebar = document.getElementById('sidebar');
 const ROW=26, PAD=8, HDR=34;
 
+// ═══════════════════════════════════════
+// UNDO/REDO HISTORY
+// ═══════════════════════════════════════
+const undoStack = [];
+const redoStack = [];
+const MAX_HISTORY = 50;
+
+function takeSnapshot(){
+  const snap={
+    cats: JSON.parse(JSON.stringify(cats.map(c=>({...c,_addOpen:false})))),
+    customContent: JSON.parse(JSON.stringify(customContent)),
+    subChecked: JSON.parse(JSON.stringify(subChecked))
+  };
+  return snap;
+}
+
+function applySnapshot(snap){
+  applyingRemote=true;
+  cats.length=0;
+  snap.cats.forEach(c=>cats.push({...c}));
+  Object.assign(customContent,snap.customContent);
+  Object.assign(subChecked,snap.subChecked);
+  renderAll();
+  applyingRemote=false;
+}
+
+function recordAction(){
+  if(applyingRemote)return;
+  undoStack.push(takeSnapshot());
+  if(undoStack.length>MAX_HISTORY)undoStack.shift();
+  redoStack.length=0;
+  updateHistoryUI();
+}
+
+function undo(){
+  if(undoStack.length===0)return;
+  redoStack.push(takeSnapshot());
+  const prevSnap=undoStack.pop();
+  applySnapshot(prevSnap);
+  updateHistoryUI();
+}
+
+function redo(){
+  if(redoStack.length===0)return;
+  undoStack.push(takeSnapshot());
+  const nextSnap=redoStack.pop();
+  applySnapshot(nextSnap);
+  updateHistoryUI();
+}
+
+function updateHistoryUI(){
+  const undoBtn=document.getElementById('undo-btn');
+  const redoBtn=document.getElementById('redo-btn');
+  undoBtn.disabled=undoStack.length===0;
+  redoBtn.disabled=redoStack.length===0;
+}
+
 function boxH(cat){return HDR+PAD+Math.ceil(cat.s.length/2)*ROW+PAD+(cat._addOpen?30:0);}
 function centerOf(cat){const p=nodeMap[cat.id]?nodeMap[cat.id].pos:{x:cat.x,y:cat.y};return{x:p.x+cat.w/2,y:p.y+boxH(cat)/2};}
 
@@ -588,7 +650,7 @@ function buildGrid(cat){
     const sel=document.createElement('select');sel.innerHTML='<option value="p">○ Pend.</option><option value="g">◈ GDD</option><option value="d">✓ Impl.</option>';
     const ok=mkEl('button','add-ok','✓');const cancel=mkEl('button','add-cancel','×');
     [inp,sel,ok,cancel].forEach(noMD);
-    ok.onclick=()=>{const n=inp.value.trim();if(n){cat.s.push([n,sel.value]);cat._addOpen=false;refreshCat(cat);drawLines();updateFooter();scheduleSave();}};
+    ok.onclick=()=>{const n=inp.value.trim();if(n){recordAction();cat.s.push([n,sel.value]);cat._addOpen=false;refreshCat(cat);drawLines();updateFooter();scheduleSave();}};
     cancel.onclick=()=>{cat._addOpen=false;refreshCat(cat);};
     inp.addEventListener('keydown',e=>{if(e.key==='Enter')ok.click();if(e.key==='Escape')cancel.click();e.stopPropagation();});
     row.append(inp,sel,ok,cancel);grid.appendChild(row);
@@ -620,7 +682,7 @@ function openSidebar(name,cat){
   const descEl=document.getElementById('sb-desc');
   descEl.textContent=cc.desc!==null?cc.desc:(info?info.desc:'');
   const capName=name;
-  descEl.oninput=()=>{getCC(capName).desc=descEl.textContent;scheduleSave();};
+  descEl.oninput=()=>{recordAction();getCC(capName).desc=descEl.textContent;scheduleSave();};
   const ul=document.getElementById('sb-subs');ul.innerHTML='';
   const subs=info?info.subs:[];
   if(subs.length>0){
@@ -630,7 +692,7 @@ function openSidebar(name,cat){
       const ck=mkEl('span','sb-check',checked?'☑':'☐');
       const tx=mkEl('span','sb-sub-text',sub);
       li.append(ck,tx);
-      li.onclick=()=>{subChecked[key]=!subChecked[key];li.className='sb-sub'+(subChecked[key]?' checked':'');ck.textContent=subChecked[key]?'☑':'☐';updateProgress(name,subs.length);scheduleSave();};
+      li.onclick=()=>{recordAction();subChecked[key]=!subChecked[key];li.className='sb-sub'+(subChecked[key]?' checked':'');ck.textContent=subChecked[key]?'☑':'☐';updateProgress(name,subs.length);scheduleSave();};
       ul.appendChild(li);
     });
     updateProgress(name,subs.length);
@@ -707,7 +769,7 @@ function renderBlocks(key){
     const badge=mkEl('span','sb-block-type',TYPE_LABELS[b.type]||'?');
     const del=mkEl('button','sb-block-del','×');
     del.addEventListener('mousedown',e=>e.stopPropagation());
-    del.onclick=()=>{cc.blocks=cc.blocks.filter(x=>x.id!==b.id);renderBlocks(key);scheduleSave();};
+    del.onclick=()=>{recordAction();cc.blocks=cc.blocks.filter(x=>x.id!==b.id);renderBlocks(key);scheduleSave();};
     if(b.type==='image'){
       const wrap=document.createElement('div');wrap.style.flex='1';
       const urlInp=document.createElement('input');urlInp.type='url';urlInp.className='sb-block-url';
@@ -715,13 +777,13 @@ function renderBlocks(key){
       urlInp.addEventListener('mousedown',e=>e.stopPropagation());
       const imgEl=document.createElement('img');imgEl.className='sb-block-img';
       imgEl.style.display=b.url?'block':'none';if(b.url)imgEl.src=b.url;
-      urlInp.oninput=()=>{b.url=urlInp.value.trim();imgEl.src=b.url;imgEl.style.display=b.url?'block':'none';scheduleSave();};
+      urlInp.oninput=()=>{recordAction();b.url=urlInp.value.trim();imgEl.src=b.url;imgEl.style.display=b.url?'block':'none';scheduleSave();};
       imgEl.onclick=()=>{if(b.url)window.open(b.url,'_blank');};
       wrap.append(urlInp,imgEl);block.append(badge,wrap,del);
     }else{
       const text=document.createElement('div');text.className='sb-block-text';
       text.contentEditable='true';text.spellcheck=false;text.textContent=b.text;
-      text.oninput=()=>{b.text=text.textContent;scheduleSave();};
+      text.oninput=()=>{recordAction();b.text=text.textContent;scheduleSave();};
       text.addEventListener('mousedown',e=>e.stopPropagation());
       text.addEventListener('keydown',e=>{if(e.key==='Enter'&&!e.shiftKey&&b.type!=='body')e.preventDefault();e.stopPropagation();});
       block.append(badge,text,del);
@@ -733,6 +795,7 @@ function renderBlocks(key){
 function toggleAddMenu(){document.getElementById('sb-add-menu').classList.toggle('show');}
 function addBlock(type){
   if(!currentKey)return;
+  recordAction();
   const cc=getCC(currentKey);
   const blk={id:Date.now().toString(),type,text:''};
   if(type==='image')blk.url='';
@@ -750,15 +813,17 @@ document.addEventListener('click',e=>{
 // ═══════════════════════════════════════
 // MUTATIONS
 // ═══════════════════════════════════════
-function toggleAddForm(cat){cat._addOpen=!cat._addOpen;refreshCat(cat);}
-function deleteSystem(catId,idx){const c=cats.find(x=>x.id===catId);c.s.splice(idx,1);refreshCat(c);drawLines();updateFooter();scheduleSave();}
-function cycleStatus(cat,idx){cat.s[idx][1]=STATUS_CYCLE[cat.s[idx][1]];refreshCat(cat);updateFooter();scheduleSave();}
+function toggleAddForm(cat){recordAction();cat._addOpen=!cat._addOpen;refreshCat(cat);}
+function deleteSystem(catId,idx){recordAction();const c=cats.find(x=>x.id===catId);c.s.splice(idx,1);refreshCat(c);drawLines();updateFooter();scheduleSave();}
+function cycleStatus(cat,idx){recordAction();cat.s[idx][1]=STATUS_CYCLE[cat.s[idx][1]];refreshCat(cat);updateFooter();scheduleSave();}
 function deleteCategory(id){
+  recordAction();
   const i=cats.findIndex(c=>c.id===id);if(i===-1)return;
   canvas.removeChild(nodeMap[id].el);delete nodeMap[id];cats.splice(i,1);
   drawLines();updateFooter();closeSidebar();scheduleSave();
 }
 function addCategory(label,col){
+  recordAction();
   const id='cat_'+Date.now();
   cats.push({id,l:label.toUpperCase(),col,x:200,y:200,w:280,s:[]});
   buildCatEl(cats[cats.length-1]);updateFooter();drawLines();scheduleSave();
@@ -793,7 +858,7 @@ function addDragBehavior(box,cat){
     dragging=false;box.classList.remove('dragging');
     window.removeEventListener('mousemove',onDrag);window.removeEventListener('mouseup',onUp);
     if(!didDrag&&onHeader){openCategorySidebar(cat);}
-    else if(didDrag){scheduleSave();}
+    else if(didDrag){recordAction();scheduleSave();}
   }
 
   // Touch drag
@@ -819,7 +884,7 @@ function addDragBehavior(box,cat){
   },{passive:false});
 
   box.addEventListener('touchend',()=>{
-    if(dragging){dragging=false;box.classList.remove('dragging');scheduleSave();}
+    if(dragging){dragging=false;box.classList.remove('dragging');recordAction();scheduleSave();}
     else if(touchOnHeader){openCategorySidebar(cat);}
   },{passive:true});
 }
@@ -926,6 +991,7 @@ function updateFooter(){
 // ═══════════════════════════════════════
 applyTransform();
 renderAll(); // always render from local defaults immediately
+updateHistoryUI();
 
 setSyncStatus('connecting');
 loadFromDB()
