@@ -540,6 +540,7 @@ const ROW=26, PAD=8, HDR=34;
 const undoStack = [];
 const redoStack = [];
 const MAX_HISTORY = 50;
+let textChangeTimer = null;
 
 function takeSnapshot(){
   const snap={
@@ -582,6 +583,11 @@ function redo(){
   const nextSnap=redoStack.pop();
   applySnapshot(nextSnap);
   updateHistoryUI();
+}
+
+function recordTextChange(){
+  clearTimeout(textChangeTimer);
+  textChangeTimer=setTimeout(()=>{recordAction();textChangeTimer=null;},500);
 }
 
 function updateHistoryUI(){
@@ -682,7 +688,7 @@ function openSidebar(name,cat){
   const descEl=document.getElementById('sb-desc');
   descEl.textContent=cc.desc!==null?cc.desc:(info?info.desc:'');
   const capName=name;
-  descEl.oninput=()=>{recordAction();getCC(capName).desc=descEl.textContent;scheduleSave();};
+  descEl.oninput=()=>{recordTextChange();getCC(capName).desc=descEl.textContent;scheduleSave();};
   const ul=document.getElementById('sb-subs');ul.innerHTML='';
   const subs=info?info.subs:[];
   if(subs.length>0){
@@ -777,13 +783,13 @@ function renderBlocks(key){
       urlInp.addEventListener('mousedown',e=>e.stopPropagation());
       const imgEl=document.createElement('img');imgEl.className='sb-block-img';
       imgEl.style.display=b.url?'block':'none';if(b.url)imgEl.src=b.url;
-      urlInp.oninput=()=>{recordAction();b.url=urlInp.value.trim();imgEl.src=b.url;imgEl.style.display=b.url?'block':'none';scheduleSave();};
+      urlInp.oninput=()=>{recordTextChange();b.url=urlInp.value.trim();imgEl.src=b.url;imgEl.style.display=b.url?'block':'none';scheduleSave();};
       imgEl.onclick=()=>{if(b.url)window.open(b.url,'_blank');};
       wrap.append(urlInp,imgEl);block.append(badge,wrap,del);
     }else{
       const text=document.createElement('div');text.className='sb-block-text';
       text.contentEditable='true';text.spellcheck=false;text.textContent=b.text;
-      text.oninput=()=>{recordAction();b.text=text.textContent;scheduleSave();};
+      text.oninput=()=>{recordTextChange();b.text=text.textContent;scheduleSave();};
       text.addEventListener('mousedown',e=>e.stopPropagation());
       text.addEventListener('keydown',e=>{if(e.key==='Enter'&&!e.shiftKey&&b.type!=='body')e.preventDefault();e.stopPropagation();});
       block.append(badge,text,del);
