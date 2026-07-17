@@ -789,7 +789,11 @@ function renderBlocks(key){
     }else{
       const text=document.createElement('div');text.className='sb-block-text';
       text.contentEditable='true';text.spellcheck=false;text.textContent=b.text;
-      text.oninput=()=>{recordTextChange();b.text=text.textContent;scheduleSave();};
+      const isShortText=b.type!=='body';
+      text.oninput=()=>{
+        if(isShortText){recordAction();}else{recordTextChange();}
+        b.text=text.textContent;scheduleSave();
+      };
       text.addEventListener('mousedown',e=>e.stopPropagation());
       text.addEventListener('keydown',e=>{if(e.key==='Enter'&&!e.shiftKey&&b.type!=='body')e.preventDefault();e.stopPropagation();});
       block.append(badge,text,del);
