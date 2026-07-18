@@ -127,8 +127,14 @@ svg#lines { position: absolute; top: 0; left: 0; pointer-events: none; overflow:
 .sb-sub:hover  { background: #1c1c1c; color: #888; border-color: #222; }
 .sb-sub.checked { color: #81c784; }
 .sb-sub.checked:hover { background: #1a2e1a; border-color: #2a4a2a; }
-.sb-check { font-size: 13px; flex-shrink: 0; line-height: 1.3; }
-.sb-sub-text { flex: 1; line-height: 1.4; }
+.sb-check { font-size: 13px; flex-shrink: 0; line-height: 1.3; cursor: pointer; }
+.sb-sub-text { flex: 1; line-height: 1.4; outline: none; cursor: text; border-radius: 3px; user-select: text; word-break: break-word; }
+.sb-sub-text:focus { background: #222; color: #999; padding: 0 3px; margin: 0 -3px; }
+.sb-sub-x { display: none; width: 14px; height: 14px; background: rgba(180,0,0,0.6); border: none; border-radius: 3px; color: #fff; font-size: 11px; cursor: pointer; flex-shrink: 0; align-items: center; justify-content: center; padding: 0; margin-top: 1px; }
+.sb-sub:hover .sb-sub-x { display: flex; }
+.sb-sub-x:hover { background: rgba(220,0,0,0.9); }
+.sb-add-sub { width: 100%; padding: 5px; background: #1a1a1a; border: 1px dashed #2a2a2a; border-radius: 5px; color: #3a3a3a; font-size: 10.5px; cursor: pointer; text-align: center; margin-top: 4px; transition: border-color 0.12s, color 0.12s; }
+.sb-add-sub:hover { border-color: #444; color: #666; }
 .sb-empty { font-size: 11px; color: #2e2e2e; font-style: italic; padding: 6px 0; }
 #sb-blocks { display: flex; flex-direction: column; gap: 3px; }
 .sb-block { position: relative; border-radius: 5px; border: 1px solid transparent; padding: 5px 8px 5px 6px; display: flex; align-items: flex-start; gap: 7px; transition: border-color 0.12s, background 0.12s; user-select: text; }
@@ -195,6 +201,7 @@ svg#lines { position: absolute; top: 0; left: 0; pointer-events: none; overflow:
   .chip-x { display: flex; }
   .hdr-btn { opacity: 0.7 !important; }
   .sb-block-del { display: flex; }
+  .sb-sub-x { display: flex; }
 }
 
 /* Mobile layout */
@@ -740,23 +747,7 @@ function openSidebar(name,cat){
   descEl.textContent=cc.desc!==null?cc.desc:(info?info.desc:'');
   const capName=name;
   descEl.oninput=()=>{recordTextChange();getCC(capName).desc=descEl.textContent;scheduleSave();};
-  const ul=document.getElementById('sb-subs');ul.innerHTML='';
-  const subs=cc.subs||(info?info.subs:[]);
-  if(subs.length>0){
-    subs.forEach((sub,i)=>{
-      const key=name+'::'+i;const checked=!!subChecked[key];
-      const li=document.createElement('li');li.className='sb-sub'+(checked?' checked':'');
-      const ck=mkEl('span','sb-check',checked?'☑':'☐');
-      const tx=mkEl('span','sb-sub-text',sub);
-      li.append(ck,tx);
-      li.onclick=()=>{recordAction();subChecked[key]=!subChecked[key];li.className='sb-sub'+(subChecked[key]?' checked':'');ck.textContent=subChecked[key]?'☑':'☐';updateProgress(name,subs.length);scheduleSave();};
-      ul.appendChild(li);
-    });
-    updateProgress(name,subs.length);
-  }else{
-    ul.innerHTML='<li class="sb-empty">Sin subtemas definidos.</li>';
-    document.getElementById('sb-progress').textContent='';
-  }
+  renderSubs(name);
   renderBlocks(name);
   sidebar.classList.add('open');
   if(window.innerWidth<=600) document.getElementById('sb-backdrop').classList.add('show');
@@ -808,6 +799,74 @@ function updateProgress(name,total){
   const done=Object.entries(subChecked).filter(([k,v])=>k.startsWith(name+'::')&&v).length;
   const el=document.getElementById('sb-progress');
   el.innerHTML=done===0?`<span style="color:#2a2a2a">${total} items</span>`:`<span>${done}/${total}</span> done`;
+}
+
+// ═══════════════════════════════════════
+// SUBTEMAS (editable, copy-on-write over INFO)
+// ═══════════════════════════════════════
+function materializeSubs(name){
+  const cc=getCC(name);
+  if(!cc.subs){const info=INFO[name];cc.subs=info?info.subs.slice():[];}
+  return cc.subs;
+}
+
+function deleteSub(name,i){
+  const subs=materializeSubs(name);
+  if(i<0||i>=subs.length)return;
+  recordAction();
+  subs.splice(i,1);
+  // shift check-state keys down to keep them aligned with indexes
+  const oldLen=subs.length+1;
+  for(let j=i;j<oldLen-1;j++){
+    const nxt=subChecked[name+'::'+(j+1)];
+    if(nxt===undefined)delete subChecked[name+'::'+j];
+    else subChecked[name+'::'+j]=nxt;
+  }
+  delete subChecked[name+'::'+(oldLen-1)];
+  renderSubs(name);scheduleSave();
+}
+
+function renderSubs(name){
+  const info=INFO[name];const cc=getCC(name);
+  const subs=cc.subs||(info?info.subs:[]);
+  const ul=document.getElementById('sb-subs');ul.innerHTML='';
+  subs.forEach((sub,i)=>{
+    const key=name+'::'+i;const checked=!!subChecked[key];
+    const li=document.createElement('li');li.className='sb-sub'+(checked?' checked':'');
+    const ck=mkEl('span','sb-check',checked?'☑':'☐');
+    const tx=mkEl('span','sb-sub-text',sub);
+    tx.contentEditable='true';tx.spellcheck=false;
+    tx.addEventListener('mousedown',e=>e.stopPropagation());
+    tx.onclick=e=>e.stopPropagation();
+    tx.oninput=()=>{recordTextChange();materializeSubs(name)[i]=tx.textContent;scheduleSave();};
+    tx.onkeydown=e=>{e.stopPropagation();if(e.key==='Enter'){e.preventDefault();tx.blur();}};
+    tx.onblur=()=>{if(tx.textContent.trim()==='')deleteSub(name,i);};
+    const x=mkEl('button','sb-sub-x','×');
+    x.onclick=e=>{e.stopPropagation();deleteSub(name,i);};
+    const toggle=()=>{recordAction();subChecked[key]=!subChecked[key];li.className='sb-sub'+(subChecked[key]?' checked':'');ck.textContent=subChecked[key]?'☑':'☐';updateProgress(name,subs.length);scheduleSave();};
+    ck.onclick=e=>{e.stopPropagation();toggle();};
+    li.onclick=e=>{if(e.target===li)toggle();};
+    li.append(ck,tx,x);
+    ul.appendChild(li);
+  });
+  if(subs.length===0){
+    const empty=document.createElement('li');empty.className='sb-empty';
+    empty.textContent='Sin subtemas. Agrega el primero ↓';
+    ul.appendChild(empty);
+  }
+  const addLi=document.createElement('li');
+  const addBtn=mkEl('button','sb-add-sub','+ Agregar subtema');
+  addBtn.onclick=()=>{
+    recordAction();
+    materializeSubs(name).push('');
+    renderSubs(name);scheduleSave();
+    const items=document.getElementById('sb-subs').querySelectorAll('.sb-sub-text');
+    const last=items[items.length-1];
+    if(last)requestAnimationFrame(()=>last.focus());
+  };
+  addLi.appendChild(addBtn);ul.appendChild(addLi);
+  if(subs.length>0)updateProgress(name,subs.length);
+  else document.getElementById('sb-progress').textContent='';
 }
 function closeSidebar(){
   sidebar.classList.remove('open');
