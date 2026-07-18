@@ -540,55 +540,100 @@ const ROW=26, PAD=8, HDR=34;
 const undoStack = [];
 const redoStack = [];
 const MAX_HISTORY = 50;
-let textChangeTimer = null;
+let burstActive = false, burstTimer = null;
+let pendingDragSnap = null;
 
-function takeSnapshot(){
-  const snap={
-    cats: JSON.parse(JSON.stringify(cats.map(c=>({...c,_addOpen:false})))),
-    customContent: JSON.parse(JSON.stringify(customContent)),
-    subChecked: JSON.parse(JSON.stringify(subChecked))
-  };
-  return snap;
+// Snapshot serializes live state, using current drag positions from nodeMap
+function snapState(){
+  return JSON.stringify({
+    cats: cats.map(c=>{
+      const p=nodeMap[c.id]?nodeMap[c.id].pos:{x:c.x,y:c.y};
+      return {...c,x:Math.round(p.x),y:Math.round(p.y),_addOpen:false};
+    }),
+    customContent, subChecked
+  });
 }
 
-function applySnapshot(snap){
-  applyingRemote=true;
-  cats.length=0;
-  snap.cats.forEach(c=>cats.push({...c}));
-  Object.assign(customContent,snap.customContent);
-  Object.assign(subChecked,snap.subChecked);
-  renderAll();
-  applyingRemote=false;
-}
-
-function recordAction(){
+function pushSnap(json){
   if(applyingRemote)return;
-  undoStack.push(takeSnapshot());
+  burstActive=false;clearTimeout(burstTimer);
+  undoStack.push(json);
   if(undoStack.length>MAX_HISTORY)undoStack.shift();
   redoStack.length=0;
   updateHistoryUI();
 }
 
+// Discrete actions: call BEFORE mutating state
+function recordAction(){ pushSnap(snapState()); }
+
+// Text typing: the FIRST keystroke of a burst captures the pre-edit state
+// (the model is updated after this call, so snapState() is still pre-change).
+// The burst closes after 800ms without typing or on any discrete action.
+function recordTextChange(){
+  if(applyingRemote)return;
+  if(!burstActive){
+    burstActive=true;
+    undoStack.push(snapState());
+    if(undoStack.length>MAX_HISTORY)undoStack.shift();
+    redoStack.length=0;
+    updateHistoryUI();
+  }
+  clearTimeout(burstTimer);
+  burstTimer=setTimeout(()=>{burstActive=false;},800);
+}
+
+function applySnapshot(json){
+  const s=JSON.parse(json);
+  applyingRemote=true;
+  Object.keys(nodeMap).forEach(id=>{canvas.removeChild(nodeMap[id].el);delete nodeMap[id];});
+  cats.length=0;
+  s.cats.forEach(c=>cats.push(c));
+  Object.keys(customContent).forEach(k=>delete customContent[k]);
+  Object.assign(customContent,s.customContent);
+  Object.keys(subChecked).forEach(k=>delete subChecked[k]);
+  Object.assign(subChecked,s.subChecked);
+  renderAll();
+  refreshSidebarView();
+  applyingRemote=false;
+  scheduleSave(); // propagate the restored state to other sessions
+}
+
+// Re-render the open sidebar so it reflects the restored state
+function refreshSidebarView(){
+  if(!sidebar.classList.contains('open'))return;
+  if(currentSys){
+    const cat=cats.find(c=>c.s.some(x=>x[0]===currentSys));
+    if(cat){prevCat=prevCat?cats.find(c=>c.id===prevCat.id)||null:null;openSidebar(currentSys,cat);}
+    else closeSidebar();
+  }else if(currentKey){
+    const cat=cats.find(c=>c.id===currentKey);
+    if(cat)openCategorySidebar(cat);else closeSidebar();
+  }
+}
+
 function undo(){
   if(undoStack.length===0)return;
-  redoStack.push(takeSnapshot());
-  const prevSnap=undoStack.pop();
-  applySnapshot(prevSnap);
+  burstActive=false;clearTimeout(burstTimer);
+  redoStack.push(snapState());
+  applySnapshot(undoStack.pop());
   updateHistoryUI();
 }
 
 function redo(){
   if(redoStack.length===0)return;
-  undoStack.push(takeSnapshot());
-  const nextSnap=redoStack.pop();
-  applySnapshot(nextSnap);
+  burstActive=false;clearTimeout(burstTimer);
+  undoStack.push(snapState());
+  applySnapshot(redoStack.pop());
   updateHistoryUI();
 }
 
-function recordTextChange(){
-  clearTimeout(textChangeTimer);
-  textChangeTimer=setTimeout(()=>{recordAction();textChangeTimer=null;},500);
-}
+document.addEventListener('keydown',e=>{
+  if((e.ctrlKey||e.metaKey)&&!e.altKey){
+    const k=e.key.toLowerCase();
+    if(k==='z'&&!e.shiftKey){e.preventDefault();undo();}
+    else if(k==='y'||(k==='z'&&e.shiftKey)){e.preventDefault();redo();}
+  }
+});
 
 function updateHistoryUI(){
   const undoBtn=document.getElementById('undo-btn');
@@ -730,7 +775,7 @@ function openCategorySidebar(cat){
   const descEl=document.getElementById('sb-desc');
   descEl.textContent=cc.desc!==null?cc.desc:'';
   const capId=cat.id;
-  descEl.oninput=()=>{getCC(capId).desc=descEl.textContent;scheduleSave();};
+  descEl.oninput=()=>{recordTextChange();getCC(capId).desc=descEl.textContent;scheduleSave();};
   const ul=document.getElementById('sb-subs');ul.innerHTML='';
   cat.s.forEach(([name,st])=>{
     const li=document.createElement('li');li.className='sb-sub sys';
@@ -789,11 +834,7 @@ function renderBlocks(key){
     }else{
       const text=document.createElement('div');text.className='sb-block-text';
       text.contentEditable='true';text.spellcheck=false;text.textContent=b.text;
-      const isShortText=b.type!=='body';
-      text.oninput=()=>{
-        if(isShortText){recordAction();}else{recordTextChange();}
-        b.text=text.textContent;scheduleSave();
-      };
+      text.oninput=()=>{recordTextChange();b.text=text.textContent;scheduleSave();};
       text.addEventListener('mousedown',e=>e.stopPropagation());
       text.addEventListener('keydown',e=>{if(e.key==='Enter'&&!e.shiftKey&&b.type!=='body')e.preventDefault();e.stopPropagation();});
       block.append(badge,text,del);
@@ -823,7 +864,7 @@ document.addEventListener('click',e=>{
 // ═══════════════════════════════════════
 // MUTATIONS
 // ═══════════════════════════════════════
-function toggleAddForm(cat){recordAction();cat._addOpen=!cat._addOpen;refreshCat(cat);}
+function toggleAddForm(cat){cat._addOpen=!cat._addOpen;refreshCat(cat);}
 function deleteSystem(catId,idx){recordAction();const c=cats.find(x=>x.id===catId);c.s.splice(idx,1);refreshCat(c);drawLines();updateFooter();scheduleSave();}
 function cycleStatus(cat,idx){recordAction();cat.s[idx][1]=STATUS_CYCLE[cat.s[idx][1]];refreshCat(cat);updateFooter();scheduleSave();}
 function deleteCategory(id){
@@ -852,6 +893,7 @@ function addDragBehavior(box,cat){
     if(t.tagName==='BUTTON'||t.tagName==='INPUT'||t.tagName==='SELECT'||t.contentEditable==='true')return;
     e.stopPropagation();
     dragging=true;didDrag=false;
+    pendingDragSnap=snapState();
     startX=e.clientX;startY=e.clientY;
     onHeader=!!e.target.closest('.cat-header');
     box.classList.add('dragging');
@@ -868,7 +910,7 @@ function addDragBehavior(box,cat){
     dragging=false;box.classList.remove('dragging');
     window.removeEventListener('mousemove',onDrag);window.removeEventListener('mouseup',onUp);
     if(!didDrag&&onHeader){openCategorySidebar(cat);}
-    else if(didDrag){recordAction();scheduleSave();}
+    else if(didDrag){pushSnap(pendingDragSnap);scheduleSave();}
   }
 
   // Touch drag
@@ -877,6 +919,7 @@ function addDragBehavior(box,cat){
     const t=e.target;
     if(t.tagName==='BUTTON'||t.tagName==='INPUT'||t.tagName==='SELECT'||t.contentEditable==='true')return;
     panning=false;
+    pendingDragSnap=snapState();
     tsx=e.touches[0].clientX;tsy=e.touches[0].clientY;
     touchOnHeader=!!e.target.closest('.cat-header');
     const p=nodeMap[cat.id].pos;
@@ -894,7 +937,7 @@ function addDragBehavior(box,cat){
   },{passive:false});
 
   box.addEventListener('touchend',()=>{
-    if(dragging){dragging=false;box.classList.remove('dragging');recordAction();scheduleSave();}
+    if(dragging){dragging=false;box.classList.remove('dragging');pushSnap(pendingDragSnap);scheduleSave();}
     else if(touchOnHeader){openCategorySidebar(cat);}
   },{passive:true});
 }
